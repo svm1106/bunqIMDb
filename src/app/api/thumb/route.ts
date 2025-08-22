@@ -4,7 +4,7 @@ import sharp from 'sharp'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
-export const preferredRegion = ['cdg1'] // facultatif: proche de Paris
+export const preferredRegion = ['cdg1'] // optionnel : proche de Paris
 
 const ALLOWED_HOSTS = new Set([
   'm.media-amazon.com',
@@ -67,30 +67,31 @@ export async function GET(req: NextRequest) {
       background: bg,
     })
 
-    let outBytes: Uint8Array
+    let outBuf: Buffer
     let ctype: string
     if (fmt === 'jpeg' || fmt === 'jpg') {
-      const b = await base.jpeg({ quality: q }).toBuffer()
-      outBytes = new Uint8Array(b) // ✅ Buffer -> Uint8Array
+      outBuf = await base.jpeg({ quality: q }).toBuffer()
       ctype = 'image/jpeg'
     } else if (fmt === 'png') {
-      const b = await base.png({ compressionLevel: 6 }).toBuffer()
-      outBytes = new Uint8Array(b)
+      outBuf = await base.png({ compressionLevel: 6 }).toBuffer()
       ctype = 'image/png'
     } else {
-      const b = await base.webp({ quality: q }).toBuffer()
-      outBytes = new Uint8Array(b)
+      outBuf = await base.webp({ quality: q }).toBuffer()
       ctype = 'image/webp'
     }
 
-    return new Response(outBytes, {
+    // ✅ Convertit en ArrayBuffer exact (sans le padding potentiel du Buffer)
+    const outBytes = new Uint8Array(outBuf)
+    const ab = outBytes.buffer.slice(outBytes.byteOffset, outBytes.byteOffset + outBytes.byteLength)
+
+    return new Response(ab as ArrayBuffer, {
       status: 200,
       headers: {
         'Content-Type': ctype,
         'Cache-Control': 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400',
       },
     })
-  } catch (e: unknown) {
+  } catch (e) {
     const msg = e instanceof Error ? e.message : 'failed'
     return new Response(`Thumb error: ${msg}`, { status: 500 })
   }
