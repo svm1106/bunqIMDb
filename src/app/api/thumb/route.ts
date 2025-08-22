@@ -4,6 +4,7 @@ import sharp from 'sharp'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
+export const preferredRegion = ['cdg1'] // facultatif: proche de Paris
 
 const ALLOWED_HOSTS = new Set([
   'm.media-amazon.com',
@@ -39,7 +40,9 @@ export async function GET(req: NextRequest) {
     const fmt = (searchParams.get('format') || 'webp').toLowerCase()
 
     const fitParam = (searchParams.get('fit') || 'cover').toLowerCase()
-    const fit = ['cover', 'contain', 'inside'].includes(fitParam) ? (fitParam as 'cover' | 'contain' | 'inside') : 'cover'
+    const fit: 'cover' | 'contain' | 'inside' =
+      (['cover', 'contain', 'inside'].includes(fitParam) ? fitParam : 'cover') as
+        'cover' | 'contain' | 'inside'
     const bg = parseHexColor(searchParams.get('bg') || '')
     const q = Math.max(40, Math.min(95, parseInt(searchParams.get('q') || '78', 10)))
 
@@ -60,31 +63,35 @@ export async function GET(req: NextRequest) {
 
     const base = sharp(buf).resize(w, h, {
       fit,
-      position: 'attention', // 👈 accepte directement une string
+      position: 'attention',
       background: bg,
     })
 
-    let out: Buffer
+    let outBytes: Uint8Array
     let ctype: string
     if (fmt === 'jpeg' || fmt === 'jpg') {
-      out = await base.jpeg({ quality: q }).toBuffer()
+      const b = await base.jpeg({ quality: q }).toBuffer()
+      outBytes = new Uint8Array(b) // ✅ Buffer -> Uint8Array
       ctype = 'image/jpeg'
     } else if (fmt === 'png') {
-      out = await base.png({ compressionLevel: 6 }).toBuffer()
+      const b = await base.png({ compressionLevel: 6 }).toBuffer()
+      outBytes = new Uint8Array(b)
       ctype = 'image/png'
     } else {
-      out = await base.webp({ quality: q }).toBuffer()
+      const b = await base.webp({ quality: q }).toBuffer()
+      outBytes = new Uint8Array(b)
       ctype = 'image/webp'
     }
 
-    return new Response(out, {
+    return new Response(outBytes, {
       status: 200,
       headers: {
         'Content-Type': ctype,
         'Cache-Control': 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400',
       },
     })
-  } catch (e: any) {
-    return new Response(`Thumb error: ${e?.message || 'failed'}`, { status: 500 })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'failed'
+    return new Response(`Thumb error: ${msg}`, { status: 500 })
   }
 }
