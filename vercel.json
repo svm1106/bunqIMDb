@@ -1,9 +1,9 @@
 {
     "functions": {
       "api/**": {
-        "runtime": "nodejs20.x",
-        "externalNodeModules": ["sharp"]
+        "runtime": "nodejs20.x"
       }
-    }
+    },
+    "buildCommand": "npm ci && npm rebuild sharp --platform=linux --arch=x64 || true && npm run build"
   }
   
