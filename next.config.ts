@@ -2,17 +2,21 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  // Lint non bloquant en CI, mais on garde TypeScript strict
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: false },
 
-  // ✅ Empaquette node_modules nécessaires (sharp, archiver, etc.) dans la lambda
-  output: 'standalone',
-
-  experimental: {
-    // ✅ Force l’inclusion de ces paquets côté serveur (API routes / RSC)
-    serverComponentsExternalPackages: ['sharp', 'archiver'],
+  // ✅ Image Optimization côté Vercel (pas besoin de sharp dans ton code)
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: 'm.media-amazon.com' },
+      { protocol: 'https', hostname: 'ia.media-imdb.com' },
+      { protocol: 'https', hostname: 'images-na.ssl-images-amazon.com' },
+    ],
+    formats: ['image/avif', 'image/webp'],
   },
+
+  // (optionnel) garde standalone si tu veux des bundles plus compacts
+  output: 'standalone',
 }
 
 export default nextConfig

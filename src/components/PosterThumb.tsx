@@ -1,11 +1,14 @@
-// PosterThumb.tsx (exemple)
+// src/components/PosterThumb.tsx
+'use client'
+import Image from 'next/image'
+
 type Props = { url: string; title: string; width: number; height: number }
 
 export default function PosterThumb({ url, title, width, height }: Props) {
   const isLocal = url.startsWith('blob:') || url.startsWith('data:')
 
   if (isLocal) {
-    // 👉 Pas de resize server-side : affichage direct
+    // Les blobs/data restent en <img>
     return (
       <img
         src={url}
@@ -13,20 +16,22 @@ export default function PosterThumb({ url, title, width, height }: Props) {
         width={width}
         height={height}
         style={{ objectFit: 'cover', borderRadius: 6, display: 'block' }}
+        loading="lazy"
+        decoding="async"
       />
     )
   }
 
-  // 👉 Cas normal (URL http/https ou ton /api/thumb) : ta logique existante
-  // Exemple si tu avais un endpoint /api/thumb?src=...&w=...&h=...
-  const thumbUrl = `/api/thumb?src=${encodeURIComponent(url)}&w=${width}&h=${height}&format=webp&fit=cover`
+  // URL http(s) → Next/Image (optimisé par Vercel)
   return (
-    <img
-      src={thumbUrl}
+    <Image
+      src={url}
       alt={title}
       width={width}
       height={height}
       style={{ objectFit: 'cover', borderRadius: 6, display: 'block' }}
+      sizes={`${width}px`}
+      priority={false}
     />
   )
 }

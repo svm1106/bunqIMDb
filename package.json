@@ -2,17 +2,14 @@
   "name": "imdb-bunqer",
   "version": "0.1.0",
   "private": true,
-  "engines": {
-    "node": ">=18"
-  },
+  "engines": { "node": ">=18" },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
     "test:imdb": "tsx ./src/scripts/test-imdb.ts",
-    "introspect": "tsx ./src/scripts/introspect.ts",
-    "postinstall": "npm rebuild sharp || true"
+    "introspect": "tsx ./src/scripts/introspect.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dataexchange": "^3.872.0",
@@ -39,7 +36,6 @@
     "p-limit": "^7.1.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "sharp": "^0.34.3",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
