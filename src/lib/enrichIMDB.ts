@@ -1,6 +1,6 @@
 // src/lib/enrichIMDB.ts
 import { queryImdbGraphQL } from './imdbADX'
-import { normalizeGenre, deduceCategory, normalizeCountry } from './normalize'
+import { normalizeGenre, deduceCategory, normalizeCountry, normalizeLanguage } from './normalize'
 
 export type EnrichmentResult = {
   enriched:
@@ -67,8 +67,6 @@ const QUERY = `
   }
 `
 
-// --------- Robustesse (retry/timeout) ---------------------------------------
-
 const RETRIES = Number(process.env.IMDB_RETRIES || 4)
 const TIMEOUT_MS = Number(process.env.IMDB_TIMEOUT_MS || 8000)
 
@@ -82,7 +80,7 @@ async function withRetry<T>(fn: () => Promise<T>, tries = RETRIES, base = 400): 
       const code = e?.status || e?.code || e?.response?.status
       const retriable = [429, 500, 502, 503, 504].includes(code)
       if (!retriable || i === tries - 1) break
-      const delay = base * (2 ** i) + Math.floor(Math.random() * 250) // backoff + jitter
+      const delay = base * (2 ** i) + Math.floor(Math.random() * 250)
       await new Promise(r => setTimeout(r, delay))
     }
   }
@@ -101,8 +99,6 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-// --------- Utils d’extraction -----------------------------------------------
-
 type PlotEdge = { node?: { plotType?: string; plotText?: { plainText?: string } } }
 const safeArr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [])
 
@@ -111,13 +107,10 @@ function pickSynopsis(plots: PlotEdge[]): string {
   return byType('summary') || byType('outline') || plots?.[0]?.node?.plotText?.plainText || ''
 }
 
-// --------- Fonction principale ----------------------------------------------
-
 export async function enrichIMDB(imdbId: string): Promise<EnrichmentResult> {
   if (!imdbId) return { enriched: null, error: 'No IMDb id', debug: '' }
 
   try {
-    // NB: si queryImdbGraphQL supporte { signal }, tu peux remplacer withTimeout par un AbortController natif.
     const json = await withRetry(
       () => withTimeout(queryImdbGraphQL<any>(QUERY, { id: imdbId, epFirst: 1, seasonLimit: 200 }), TIMEOUT_MS),
       RETRIES,
@@ -129,7 +122,7 @@ export async function enrichIMDB(imdbId: string): Promise<EnrichmentResult> {
       return { enriched: null, error: '❌ IMDb : Pas de résultat', debug: QUERY }
     }
 
-    // Genres possibles depuis 2 champs différents
+    // -------- Genres (deux sources possibles)
     const fromTitleGenres: string[] = Array.isArray(t.titleGenres?.genres)
       ? (t.titleGenres.genres
           .map((g: any) => g?.genre?.text)
@@ -141,12 +134,30 @@ export async function enrichIMDB(imdbId: string): Promise<EnrichmentResult> {
           .filter((x: any): x is string => Boolean(x)) as string[])
       : []
     const rawGenres: string[] = fromTitleGenres.length ? fromTitleGenres : fromGenres
-
-    const genreKeywords: string[] = rawGenres.map(g => String(g).toLowerCase())
     const rawGenre: string = rawGenres[0] ?? ''
+    const genreKeywords: string[] = rawGenres.map(g => String(g).toLowerCase())
 
-    const language: string = t.spokenLanguages?.spokenLanguages?.[0]?.text || 'Unknown'
-    const country: string = t.countriesOfOrigin?.countries?.[0]?.text || 'Unknown'
+    // -------- Langues (STRICT via normalizeLanguage) + Filipino/Tagalog fusion
+    const rawLangs: string[] = Array.isArray(t.spokenLanguages?.spokenLanguages)
+      ? t.spokenLanguages.spokenLanguages
+          .map((l: any) => l?.text)
+          .filter((x: any): x is string => Boolean(x))
+      : []
+
+    // règle d’entreprise : présence de Filipino ou Tagalog => libellé unique
+    let language: string
+    if (rawLangs.some(l => /filipino|tagalog/i.test(String(l)))) {
+      language = 'Filipino, Tagalog'
+    } else {
+      const normLangs = rawLangs.map(normalizeLanguage).filter(x => x && x !== 'Unknown')
+      language = normLangs[0] || 'Unknown'
+    }
+
+    // -------- Pays (STRICT)
+    const countryRaw: string = t.countriesOfOrigin?.countries?.[0]?.text || 'Unknown'
+    const country = normalizeCountry(countryRaw)
+
+    // -------- Autres champs
     const synopsis: string = pickSynopsis(safeArr<PlotEdge>(t.plots?.edges))
 
     const directors: string[] = safeArr<any>(t.credits?.edges)
@@ -167,7 +178,7 @@ export async function enrichIMDB(imdbId: string): Promise<EnrichmentResult> {
       language,
       genre: normalizeGenre(rawGenre),
       category: deduceCategory('movie', rawGenre, t.titleType?.id || ''),
-      country: normalizeCountry(country),
+      country,
       keywords: Array.from(new Set(genreKeywords)) as string[],
       synopsis,
       posterUrl: (t.primaryImage?.url || '') as string,

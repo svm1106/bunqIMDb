@@ -4,6 +4,7 @@
 import * as React from 'react'
 import { UploadForPoster } from '@/components/UploadForPoster'
 import { PosterDataTable } from '@/components/PosterTableList'
+import { applyTitleOverlayOnClient } from '@/lib/clientOverlay'
 
 export type PosterItem = {
   row: number
@@ -135,6 +136,8 @@ export default function PostersPage() {
     try {
       const id = it.id || String(it.row)
       setGeneratingId(id)
+  
+      // 1) Génère l’image IA (PNG brut)
       const res = await fetch('/api/posters/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -154,12 +157,22 @@ export default function PostersPage() {
         alert(`Erreur: ${err?.error || res.statusText}`)
         return
       }
-
-      // PNG brut → blob local (original 1024x1536)
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-
-      // Met à jour la ligne : image + marque source 'ai'
+  
+      const baseBlob = await res.blob()
+  
+      // 2) 🔥 Overlay côté client (gradient + titre, 3 lignes max, fonts par catégorie)
+      const finalBlob = await applyTitleOverlayOnClient({
+        baseImageBlob: baseBlob,
+        title: it.title,
+        category: it.genre,       // ou passe une vraie catégorie si tu l'as
+        genreHint: it.genre,
+        width: 1024,
+        height: 1536,
+        gradientRatio: 0.42,
+      })
+  
+      const url = URL.createObjectURL(finalBlob)
+  
       setItems((prev) =>
         prev.map((x) =>
           (x.id || String(x.row)) === id
@@ -170,7 +183,7 @@ export default function PostersPage() {
     } finally {
       setGeneratingId(null)
     }
-  }
+  }  
 
   return (
     <div className="px-4 py-10 space-y-8">
