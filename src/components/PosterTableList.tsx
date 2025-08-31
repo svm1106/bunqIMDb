@@ -1,4 +1,3 @@
-// src/components/PosterDataTable.tsx
 'use client'
 
 import * as React from 'react'
@@ -12,7 +11,6 @@ import {
 } from '@tanstack/react-table'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import PosterThumb from '@/components/PosterThumb'
 import type { PosterItem } from '@/app/posters/page'
 
@@ -22,10 +20,8 @@ type Props = {
   onDownloadAll: () => void
   downloadingZip?: boolean
   onGenerateAI: (item: PosterItem) => void
-  generatingId?: string | null
+  generatingIds?: string[] | null    // ⬅️ liste d’IDs en cours
 }
-
-
 
 const THUMB_W = 128
 const THUMB_H = 192
@@ -36,8 +32,11 @@ export function PosterDataTable({
   onDownloadAll,
   downloadingZip,
   onGenerateAI,
-  generatingId,
+  generatingIds,
 }: Props) {
+  // Set pour lookup O(1)
+  const genSet = React.useMemo(() => new Set(generatingIds ?? []), [generatingIds])
+
   const columns = React.useMemo<ColumnDef<PosterItem>[]>(() => [
     {
       accessorKey: 'title',
@@ -51,6 +50,7 @@ export function PosterDataTable({
             <div className="text-xs text-muted-foreground">
               {it.imdbId ? `ID: ${it.imdbId}` : `Ligne ${it.row}`}
               {it.error ? ` • ${it.error}` : ''}
+              {it.source ? ` • Source: ${it.source.toUpperCase()}` : ''}
             </div>
           </div>
         )
@@ -58,64 +58,58 @@ export function PosterDataTable({
       enableSorting: true,
     },
     {
-        id: 'status',
-        header: () => <div className="w-full text-center">Statut</div>,
-        cell: ({ row }) => {
-          const it = row.original
-      
-          const Pill = (props: { className: string; children: React.ReactNode }) => (
-            <span
-              className={`inline-flex items-center justify-center rounded-full border text-xs font-medium
-                          px-2.5 py-0.5 ${props.className}`}
-            >
-              {props.children}
-            </span>
-          )
-      
-          if (!it.imdbId) {
-            // IMDb absent → rouge
-            return (
-              <div className="flex justify-center">
-                <Pill className="bg-red-100 text-red-800 border-red-300">
-                  IMDb manquant
-                </Pill>
-              </div>
-            )
-          }
-      
-          if (it.posterUrl) {
-            // Poster présent → vert
-            return (
-              <div className="flex justify-center">
-                <Pill className="bg-green-100 text-green-800 border-green-300">
-                  IMDb OK
-                </Pill>
-              </div>
-            )
-          }
-      
-          // IMDb présent mais pas de poster → orange
+      id: 'status',
+      header: () => <div className="w-full text-center">Statut</div>,
+      cell: ({ row }) => {
+        const it = row.original
+        const Pill = (props: { className: string; children: React.ReactNode }) => (
+          <span
+            className={`inline-flex items-center justify-center rounded-full border text-xs font-medium px-2.5 py-0.5 ${props.className}`}
+          >
+            {props.children}
+          </span>
+        )
+
+        if (!it.imdbId) {
           return (
             <div className="flex justify-center">
-              <Pill className="bg-orange-100 text-orange-800 border-orange-300">
-                Poster manquant
-              </Pill>
+              <Pill className="bg-red-100 text-red-800 border-red-300">IMDb manquant</Pill>
             </div>
           )
-        },
-        enableSorting: false,
-    },          
+        }
+
+        if (it.posterUrl) {
+          const label = it.source === 'ai' ? 'IA OK' : 'IMDb OK'
+          const styles =
+            it.source === 'ai'
+              ? 'bg-purple-100 text-purple-800 border-purple-300'
+              : 'bg-green-100 text-green-800 border-green-300'
+          return (
+            <div className="flex justify-center">
+              <Pill className={styles}>{label}</Pill>
+            </div>
+          )
+        }
+
+        return (
+          <div className="flex justify-center">
+            <Pill className="bg-orange-100 text-orange-800 border-orange-300">Poster manquant</Pill>
+          </div>
+        )
+      },
+      enableSorting: false,
+    },
     {
       id: 'poster',
       header: () => <div className="w-full text-center">Poster / Action</div>,
       cell: ({ row }) => {
         const it = row.original
         const title = it.title?.trim() || (it.imdbId ? `IMDb ${it.imdbId}` : `Ligne ${it.row}`)
-        const isLoading = generatingId === (it.id || String(it.row))
-        const isAI = it.source === 'ai'
+        const rowId = it.id || String(it.row)
+        const isLoading = genSet.has(rowId)          // ⬅️ loading par-ligne
         const hasPoster = Boolean(it.posterUrl)
+        const isAI = it.source === 'ai'
 
-        // lien vers l’original (http(s) IMDb ou blob: IA)
         const maybeLinkWrap = (node: React.ReactNode) =>
           hasPoster ? (
             <a
@@ -148,7 +142,11 @@ export function PosterDataTable({
                 )
               }
 
-              {!hasPoster && (
+              {/* Boutons :
+                  - Générer (IA) si source ≠ IA
+                  - Régénérer (IA) si source = IA
+                  - Désactivé + texte "Génération…" quand isLoading */}
+              {!isAI && (
                 <Button
                   size="sm"
                   variant="secondary"
@@ -160,7 +158,7 @@ export function PosterDataTable({
                 </Button>
               )}
 
-              {hasPoster && isAI && (
+              {isAI && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -177,9 +175,7 @@ export function PosterDataTable({
       },
       enableSorting: false,
     },
-  ], [onGenerateAI, generatingId])
-
-  
+  ], [onGenerateAI, generatingIds]) // ← dépend de la liste pour refléter le loading
 
   const table = useReactTable({
     data: items,
@@ -188,7 +184,7 @@ export function PosterDataTable({
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: {
-      pagination: { pageIndex: 0, pageSize: 25 }, // ⬅️ 25 par page
+      pagination: { pageIndex: 0, pageSize: 25 },
       sorting: [{ id: 'title', desc: false }],
     },
   })
@@ -216,7 +212,6 @@ export function PosterDataTable({
                   <TableHead key={h.id} className={h.id === 'title' ? 'text-left' : 'text-center'}>
                     {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
                   </TableHead>
-                  
                 ))}
               </TableRow>
             ))}
@@ -247,7 +242,6 @@ export function PosterDataTable({
             )}
           </TableBody>
         </Table>
-        
       </div>
 
       <div className="flex items-center justify-between px-2 sm:px-4 py-3">

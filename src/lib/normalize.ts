@@ -3,6 +3,14 @@ const normKey = (s: string) =>
 	s.trim().toLowerCase().replace(/-/g, '_').replace(/\s+/g, ''); // garde les underscores !
   
   // ===== LANGUES =====
+  // --------- Helpers (garde-les en haut du fichier si tu ne les as pas déjà)
+const normCodeKey = (s: string) =>
+	s.trim().toLowerCase().replace(/-/g, '_'); // pour les codes: garde _
+  
+  const normLabelKey = (s: string) =>
+	s.trim().toLowerCase().replace(/[^a-z0-9]+/g, ''); // pour les libellés: enlève tout sauf a-z0-9
+  
+  // ====== construit un index des libellés autorisés -> clé normalisée
   const ALLOWED_LANGUAGES = new Set([
 	'Afrikaans','Albanian','Amharic','Arabic','Armenian','Azerbaijani','Bengali','Bosnian','Bulgarian','Catalan',
 	'Chinese (Mandarin)','Chinese (Cantonese)','Croatian','Czech','Danish','Dari','Dutch','English','Estonian',
@@ -14,42 +22,69 @@ const normKey = (s: string) =>
 	'Swahili','Swedish','Tamil','Telugu','Thai','Turkish','Ukrainian','Urdu','Uzbek','Vietnamese','Welsh'
   ]);
   
+  const ALLOWED_LABEL_INDEX: Record<string,string> =
+	Array.from(ALLOWED_LANGUAGES).reduce((acc, lbl) => {
+	  acc[normLabelKey(lbl)] = lbl;
+	  return acc;
+	}, {} as Record<string,string>);
+  
   export const normalizeLanguage = (codeOrName: string): string => {
 	if (!codeOrName) return 'Unknown';
-	const k = normKey(codeOrName);
+	const raw = String(codeOrName);
   
-	// alias (codes + noms IMDb fréquents)
-	const map: Record<string, string> = {
-	  // ISO & variantes
-	  af: 'Afrikaans', sq: 'Albanian', am: 'Amharic', ar: 'Arabic', hy: 'Armenian', az: 'Azerbaijani',
-	  bn: 'Bengali', bs: 'Bosnian', bg: 'Bulgarian', ca: 'Catalan',
-	  zh: 'Chinese (Mandarin)', zh_cn: 'Chinese (Mandarin)', zh_tw: 'Chinese (Cantonese)',
-	  hr: 'Croatian', cs: 'Czech', da: 'Danish', nl: 'Dutch', en: 'English', et: 'Estonian',
-	  fa: 'Farsi (Persian)', fi: 'Finnish', fr: 'French', fr_ca: 'French (Canada)', ka: 'Georgian',
-	  de: 'German', el: 'Greek', gu: 'Gujarati', ht: 'Haitian Creole', ha: 'Hausa', he: 'Hebrew',
-	  hi: 'Hindi', hu: 'Hungarian', is: 'Icelandic', id: 'Indonesian', ga: 'Irish', it: 'Italian',
-	  ja: 'Japanese', kn: 'Kannada', kk: 'Kazakh', ko: 'Korean', lv: 'Latvian', lt: 'Lithuanian',
-	  mk: 'Macedonian', ms: 'Malay', ml: 'Malayalam', mt: 'Maltese', mr: 'Marathi', mn: 'Mongolian',
-	  nb: 'Norwegian (Bokmål)', no: 'Norwegian (Bokmål)',  // IMDb renvoie parfois "Norwegian"
-	  ps: 'Pashto', pl: 'Polish', pt: 'Portuguese (Portugal)', pt_br: 'Portuguese (Brazil)',
-	  ro: 'Romanian', ru: 'Russian', sr: 'Serbian', si: 'Sinhala', sk: 'Slovak', sl: 'Slovenian',
-	  so: 'Somali', es: 'Spanish', es_mx: 'Spanish (Mexico)', sw: 'Swahili', sv: 'Swedish',
-	  ta: 'Tamil', te: 'Telugu', th: 'Thai', tr: 'Turkish', uk: 'Ukrainian', ur: 'Urdu',
-	  uz: 'Uzbek', vi: 'Vietnamese', cy: 'Welsh', dar: 'Dari', dari: 'Dari', prs: 'Dari',
+	// 0) Règle d’entreprise prioritaire : Filipino / Tagalog => valeur unique
+	if (/\b(filipino|tagalog)\b/i.test(raw)) {
+	  return 'Filipino, Tagalog';
+	}
   
-	  // noms “pleins” IMDb fréquents → labels stricts
-	  filipino: 'Filipino, Tagalog',
-	  tagalog: 'Filipino, Tagalog',
-	  'filipino,tagalog': 'Filipino, Tagalog', // si déjà combiné sans espace
+	// 1) Mappage par codes (avec underscore conservé)
+	const codeKey = normCodeKey(raw);
+	const CODE_MAP: Record<string,string> = {
+	  // ISO & variantes usuelles
+	  af:'Afrikaans', sq:'Albanian', am:'Amharic', ar:'Arabic', hy:'Armenian', az:'Azerbaijani',
+	  bn:'Bengali', bs:'Bosnian', bg:'Bulgarian', ca:'Catalan',
+	  zh:'Chinese (Mandarin)', zh_cn:'Chinese (Mandarin)', zh_tw:'Chinese (Cantonese)',
+	  hr:'Croatian', cs:'Czech', da:'Danish', nl:'Dutch', en:'English', et:'Estonian',
+	  fa:'Farsi (Persian)', fi:'Finnish', fr:'French', fr_ca:'French (Canada)', ka:'Georgian',
+	  de:'German', el:'Greek', gu:'Gujarati', ht:'Haitian Creole', ha:'Hausa', he:'Hebrew',
+	  hi:'Hindi', hu:'Hungarian', is:'Icelandic', id:'Indonesian', ga:'Irish', it:'Italian',
+	  ja:'Japanese', kn:'Kannada', kk:'Kazakh', ko:'Korean', lv:'Latvian', lt:'Lithuanian',
+	  mk:'Macedonian', ms:'Malay', ml:'Malayalam', mt:'Maltese', mr:'Marathi', mn:'Mongolian',
+	  nb:'Norwegian (Bokmål)', no:'Norwegian (Bokmål)', // IMDb peut renvoyer "no"
+	  ps:'Pashto', pl:'Polish',
+	  pt:'Portuguese (Portugal)', pt_br:'Portuguese (Brazil)',
+	  ro:'Romanian', ru:'Russian', sr:'Serbian', si:'Sinhala', sk:'Slovak', sl:'Slovenian',
+	  so:'Somali', es:'Spanish', es_mx:'Spanish (Mexico)', sw:'Swahili', sv:'Swedish',
+	  ta:'Tamil', te:'Telugu', th:'Thai', tr:'Turkish', uk:'Ukrainian', ur:'Urdu',
+	  uz:'Uzbek', vi:'Vietnamese', cy:'Welsh',
+	  dar:'Dari', dari:'Dari', prs:'Dari'
+	};
+	const byCode = CODE_MAP[codeKey];
+	if (byCode && ALLOWED_LANGUAGES.has(byCode)) return byCode;
+  
+	// 2) Correspondance directe par libellé (IMDb renvoie "English", "French", etc.)
+	const labelKey = normLabelKey(raw);
+	const byLabel = ALLOWED_LABEL_INDEX[labelKey];
+	if (byLabel) return byLabel;
+  
+	// 3) Alias de noms courants → libellé strict
+	const NAME_ALIASES: Record<string,string> = {
 	  mandarin: 'Chinese (Mandarin)',
 	  cantonese: 'Chinese (Cantonese)',
+	  persian: 'Farsi (Persian)',
 	  norwegian: 'Norwegian (Bokmål)',
-	  persian: 'Farsi (Persian)'
-	};
+	  norwegianbokmal: 'Norwegian (Bokmål)',
+	  norwegianbokmål: 'Norwegian (Bokmål)',
   
-	const out = map[k] || null;
-	return out && ALLOWED_LANGUAGES.has(out) ? out : 'Unknown';
-  };
+	  // variantes possibles sans ponctuation
+	  filipinotagalog: 'Filipino, Tagalog',
+	  tagalogfilipino: 'Filipino, Tagalog'
+	};
+	const byAlias = NAME_ALIASES[labelKey];
+	if (byAlias && ALLOWED_LANGUAGES.has(byAlias)) return byAlias;
+  
+	return 'Unknown';
+  };  
   
   // ===== GENRES =====
   const ALLOWED_GENRES = new Set([

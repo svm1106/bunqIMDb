@@ -22,8 +22,13 @@ export type PosterItem = {
   year?: number | string
   keywords?: string
 
-  // source pour le nommage
+  // source pour le nommage / download
   source?: 'imdb' | 'ai'
+
+  // stockés dès la génération IA (pour ZIP)
+  dataB64?: string
+  mime?: string
+  filename?: string
 }
 
 export default function PostersPage() {
@@ -31,7 +36,16 @@ export default function PostersPage() {
   const [loading, setLoading] = React.useState(false)
   const [downloadingZip, setDownloadingZip] = React.useState(false)
   const [items, setItems] = React.useState<PosterItem[]>([])
-  const [generatingId, setGeneratingId] = React.useState<string | null>(null)
+
+  // ⬇️ Multi-loading: plusieurs générations en parallèle
+  const [generatingIds, setGeneratingIds] = React.useState<string[]>([])
+
+  function addGenerating(id: string) {
+    setGeneratingIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  }
+  function removeGenerating(id: string) {
+    setGeneratingIds((prev) => prev.filter((x) => x !== id))
+  }
 
   // sécurise un nom de fichier
   function safeName(s: string) {
@@ -51,7 +65,6 @@ export default function PostersPage() {
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error || 'Resolve posters failed')
 
-      // Marque source imdb quand posterUrl http(s)
       const list = (Array.isArray(json.items) ? json.items : []).map((it: PosterItem) => ({
         ...it,
         source: it.posterUrl?.startsWith('http') ? 'imdb' : undefined,
@@ -66,16 +79,22 @@ export default function PostersPage() {
     }
   }
 
-  // Convertit une URL (http(s) OU blob:) en base64 + mime
-  async function blobUrlToBase64(url: string): Promise<{ b64: string; mime: string }> {
-    const resp = await fetch(url)
-    const blob = await resp.blob()
+  // Helpers blob → base64 + dataURL
+  async function blobToBase64(blob: Blob): Promise<{ b64: string; dataUrl: string; mime: string }> {
     const arrayBuf = await blob.arrayBuffer()
-    let binary = ''
     const bytes = new Uint8Array(arrayBuf)
+    let binary = ''
     for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
     const b64 = typeof window !== 'undefined' ? btoa(binary) : Buffer.from(bytes).toString('base64')
-    return { b64, mime: blob.type || 'application/octet-stream' }
+    const mime = blob.type || 'image/png'
+    return { b64, dataUrl: `data:${mime};base64,${b64}`, mime }
+  }
+
+  async function urlToBase64(url: string): Promise<{ b64: string; mime: string }> {
+    const resp = await fetch(url)
+    const blob = await resp.blob()
+    const { b64, mime } = await blobToBase64(blob)
+    return { b64, mime }
   }
 
   async function downloadAllPosters() {
@@ -86,27 +105,34 @@ export default function PostersPage() {
       const payloadItems: any[] = []
       for (const it of withUrls) {
         const titleBase = safeName(it.title || `row-${it.row}`)
-        const url = it.posterUrl
-        const isAI = it.source === 'ai' || (!url.startsWith('http://') && !url.startsWith('https://'))
+        const isAI = it.source === 'ai'
         const suffix = isAI ? 'IaGenerated' : 'IMDb'
 
-        if (url.startsWith('http://') || url.startsWith('https://')) {
-          // IMDb → serveur fera fetch; on passe un filename SANS extension (le serveur l’ajoute selon content-type)
-          payloadItems.push({
-            imdbId: it.imdbId || undefined,
-            title: it.title || undefined,
-            posterUrl: url,
-            filename: `${titleBase} - ${suffix}`, // ext ajouté serveur
-          })
+        if (isAI) {
+          if (it.dataB64 && it.mime) {
+            payloadItems.push({
+              imdbId: it.imdbId || undefined,
+              title: it.title || undefined,
+              dataB64: it.dataB64.startsWith('data:') ? it.dataB64.split(',').pop() : it.dataB64,
+              filename: it.filename || `${titleBase} - ${suffix}.png`,
+              mime: it.mime,
+            })
+          } else {
+            const { b64, mime } = await urlToBase64(it.posterUrl)
+            payloadItems.push({
+              imdbId: it.imdbId || undefined,
+              title: it.title || undefined,
+              dataB64: b64,
+              filename: `${titleBase} - ${suffix}.png`,
+              mime,
+            })
+          }
         } else {
-          // IA (blob:) → on envoie en base64; on sait que c’est un PNG ici
-          const { b64, mime } = await blobUrlToBase64(url)
           payloadItems.push({
             imdbId: it.imdbId || undefined,
             title: it.title || undefined,
-            dataB64: b64,
-            filename: `${titleBase} - ${suffix}.png`, // on fixe .png
-            mime,
+            posterUrl: it.posterUrl,
+            filename: `${titleBase} - ${suffix}`, // ext ajouté serveur
           })
         }
       }
@@ -133,10 +159,13 @@ export default function PostersPage() {
   }
 
   async function handleGenerateAI(it: PosterItem) {
+    const id = it.id || String(it.row)
+    // si déjà en cours pour cet item, on ignore le re-click
+    if (generatingIds.includes(id)) return
+
     try {
-      const id = it.id || String(it.row)
-      setGeneratingId(id)
-  
+      addGenerating(id)
+
       // 1) Génère l’image IA (PNG brut)
       const res = await fetch('/api/posters/generate', {
         method: 'POST',
@@ -157,33 +186,48 @@ export default function PostersPage() {
         alert(`Erreur: ${err?.error || res.statusText}`)
         return
       }
-  
+
       const baseBlob = await res.blob()
-  
-      // 2) 🔥 Overlay côté client (gradient + titre, 3 lignes max, fonts par catégorie)
+
+      // 2) Overlay côté client
       const finalBlob = await applyTitleOverlayOnClient({
         baseImageBlob: baseBlob,
         title: it.title,
-        category: it.genre,       // ou passe une vraie catégorie si tu l'as
+        category: it.genre,
         genreHint: it.genre,
         width: 1024,
         height: 1536,
         gradientRatio: 0.42,
       })
-  
-      const url = URL.createObjectURL(finalBlob)
-  
+
+      // 3) Prépare affichage + base64/mime/filename (pour ZIP)
+      const objectUrl = URL.createObjectURL(finalBlob)
+      const { b64, mime } = await blobToBase64(finalBlob)
+      const ext = 'png'
+      const base = `${it.imdbId || `row-${it.row}`}${it.title ? ` - ${safeName(it.title)}` : ''}`
+      const filename = `${base}.${ext}`
+
+      // ⚠️ écrase l’affichage IMDb par l’IA
       setItems((prev) =>
         prev.map((x) =>
           (x.id || String(x.row)) === id
-            ? { ...x, posterUrl: url, status: 'ok', error: undefined, source: 'ai' }
+            ? {
+                ...x,
+                posterUrl: objectUrl,
+                status: 'ok',
+                error: undefined,
+                source: 'ai',
+                dataB64: b64,
+                mime,
+                filename,
+              }
             : x
         )
       )
     } finally {
-      setGeneratingId(null)
+      removeGenerating(id)
     }
-  }  
+  }
 
   return (
     <div className="px-4 py-10 space-y-8">
@@ -203,7 +247,7 @@ export default function PostersPage() {
           onDownloadAll={downloadAllPosters}
           downloadingZip={downloadingZip}
           onGenerateAI={handleGenerateAI}
-          generatingId={generatingId}
+          generatingIds={generatingIds} 
         />
       </div>
     </div>
