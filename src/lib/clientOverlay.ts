@@ -46,35 +46,33 @@ function styleByCategory(cat: Category) {
   }
 }
 
-function measureWrapped(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, lineHeight: number) {
-  const words = text.split(/\s+/)
+/** Wrap sans limite de lignes (hard-break les mots trop longs si nécessaire) */
+function wrapAll(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean)
   const lines: string[] = []
   let line = ''
   for (const w of words) {
     const test = line ? `${line} ${w}` : w
-    if (ctx.measureText(test).width <= maxWidth) {
+    if (ctx.measureText(test).width <= maxW) {
       line = test
     } else {
       if (line) lines.push(line)
-      // hard-break les mots trop longs
-      if (ctx.measureText(w).width > maxWidth) {
+      if (ctx.measureText(w).width > maxW) {
+        // hard-break des mots surdimensionnés
         let cur = ''
         for (const ch of w) {
           const t = cur + ch
-          if (ctx.measureText(t).width <= maxWidth) cur = t
+          if (ctx.measureText(t).width <= maxW) cur = t
           else { lines.push(cur); cur = ch }
-          if (lines.length >= 3) break
         }
         line = cur
       } else {
         line = w
       }
     }
-    if (lines.length >= 3) break
   }
-  if (line && lines.length < 3) lines.push(line)
-  const height = lines.length * lineHeight
-  return { lines, height }
+  if (line) lines.push(line)
+  return lines
 }
 
 export async function applyTitleOverlayOnClient(opts: {
@@ -84,9 +82,18 @@ export async function applyTitleOverlayOnClient(opts: {
   genreHint?: string
   width?: number
   height?: number
-  gradientRatio?: number  // 0..1 (hauteur du dégradé)
+  gradientRatio?: number  // 0..1
 }): Promise<Blob> {
-  const { baseImageBlob, title, category, genreHint, width = 1024, height = 1536, gradientRatio = 0.42 } = opts
+  const {
+    baseImageBlob, title, category, genreHint,
+    width = 1024, height = 1536, gradientRatio = 0.42
+  } = opts
+
+  // S'assurer que les fontes sont prêtes pour des mesures fiables
+  if (typeof (document as any).fonts?.ready === 'object') {
+    try { await (document as any).fonts.ready } catch {}
+  }
+
   const cat = normCat(category || genreHint)
   const style = styleByCategory(cat)
 
@@ -102,14 +109,16 @@ export async function applyTitleOverlayOnClient(opts: {
   const H = height
   const gradientH = Math.round(H * gradientRatio)
   const padX = Math.round(W * 0.07)
+  const topPadInsideGradient = Math.round(gradientH * 0.14) // petite marge en haut du dégradé
+  const minFont = 28
+  const lineHeightFactor = 1.14
 
   const cvs = document.createElement('canvas')
   cvs.width = W
   cvs.height = H
   const ctx = cvs.getContext('2d')!
 
-  // Dessine l'image source (cover)
-  // On assume que le PNG IA est déjà 1024x1536. Sinon, on ajuste pour cover:
+  // Dessine l'image (cover)
   ctx.drawImage(img, 0, 0, W, H)
 
   // Dégradé noir → transparent (sans liseré) + flush bas
@@ -119,73 +128,85 @@ export async function applyTitleOverlayOnClient(opts: {
   g.addColorStop(1.00, 'rgba(0,0,0,0)')
   ctx.fillStyle = g
   ctx.fillRect(0, H - gradientH, W, gradientH)
-  // Flush bas (2px)
   ctx.fillStyle = 'rgba(0,0,0,1)'
   ctx.fillRect(0, H - 2, W, 2)
 
-  // Titre — auto-fit jusqu’à 3 lignes, jamais hors image
+  // ---- Auto-fit : réduit la taille jusqu’à ce que TOUT tienne au-dessus du bas ----
   const clean = sanitizeTitle(title)
-  let fontSize = style.base
-  const minFont = 48
-  const lineHeightFactor = 1.14
 
-  // essaie de fit ↓ jusqu’à 3 lignes
-  let lines: string[] = []
-  let lineHeight = 0
-  while (fontSize >= minFont) {
-    ctx.font = `800 ${fontSize}px ${style.family}`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'alphabetic'
-    const lh = Math.round(fontSize * lineHeightFactor)
-    const wrap = measureWrapped(ctx, clean, W - padX * 2, lh)
-    if (wrap.lines.length <= 3) {
-      lines = wrap.lines
-      lineHeight = lh
-      break
+  // Taille de départ heuristique selon la longueur
+  let fontSizeStart = style.base
+  const L = clean.length
+  if (L > 28) fontSizeStart -= Math.min(24, Math.floor((L - 28) * 1.2))
+
+  function fitText(): { fontSize: number; lines: string[]; lineHeight: number; yStart: number } {
+    for (let font = Math.max(minFont, fontSizeStart); font >= minFont; font -= 2) {
+      ctx.font = `800 ${font}px ${style.family}`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'alphabetic'
+      const lineH = Math.round(font * lineHeightFactor)
+
+      const usableWidth = W - padX * 2
+      const lines = wrapAll(ctx, clean, usableWidth)
+
+      // marges bas selon nb de lignes
+      const bottomMargin = lines.length >= 2 ? Math.round(gradientH * 0.22) : Math.round(gradientH * 0.15)
+      const maxYBottom = H - bottomMargin
+      const minYTop = H - gradientH + topPadInsideGradient
+
+      const totalH = lines.length * lineH
+
+      // placer le bloc au plus bas possible sans dépasser,
+      // sinon remonter jusqu'au haut du dégradé si nécessaire
+      let y = maxYBottom - totalH
+      if (y < minYTop) y = minYTop
+
+      const blockBottom = y + totalH
+      if (blockBottom <= maxYBottom + 0.1) {
+        return { fontSize: font, lines, lineHeight: lineH, yStart: y }
+      }
     }
-    fontSize -= 2
-  }
-  if (lines.length === 0) {
-    fontSize = minFont
-    ctx.font = `800 ${fontSize}px ${style.family}`
-    const lh = Math.round(fontSize * lineHeightFactor)
-    const wrap = measureWrapped(ctx, clean, W - padX * 2, lh)
-    lines = wrap.lines.slice(0, 3)
-    lineHeight = lh
+
+    // fallback taille mini
+    const font = minFont
+    ctx.font = `800 ${font}px ${style.family}`
+    const lineH = Math.round(font * lineHeightFactor)
+    const lines = wrapAll(ctx, clean, W - padX * 2)
+    const bottomMargin = lines.length >= 2 ? Math.round(gradientH * 0.22) : Math.round(gradientH * 0.15)
+    const maxYBottom = H - bottomMargin
+    const minYTop = H - gradientH + topPadInsideGradient
+    const totalH = lines.length * lineH
+    let y = maxYBottom - totalH
+    if (y < minYTop) y = minYTop
+    return { fontSize: font, lines, lineHeight: lineH, yStart: y }
   }
 
-  const totalTextHeight = Math.max(lineHeight, lines.length * lineHeight)
-  const bottomMargin = lines.length >= 2 ? Math.round(gradientH * 0.22) : Math.round(gradientH * 0.15)
-  const textBottomY = H - bottomMargin
-  const minTopInsideGradient = H - gradientH + Math.round(gradientH * 0.14)
-  let y = Math.max(minTopInsideGradient, textBottomY - totalTextHeight)
+  const fit = fitText()
 
   // Style texte
-  ctx.font = `800 ${fontSize}px ${style.family}`
+  ctx.font = `800 ${fit.fontSize}px ${style.family}`
   ctx.textAlign = 'center'
   ctx.fillStyle = '#fff'
   ctx.lineJoin = 'round'
   ctx.miterLimit = 2
-  const strokeW = Math.max(1, Math.round(fontSize * 0.08))
+  const strokeW = Math.max(1, Math.round(fit.fontSize * 0.08))
   ctx.strokeStyle = 'rgba(0,0,0,0.7)'
   ctx.shadowColor = 'rgba(0,0,0,0.78)'
   ctx.shadowBlur = 8
   ctx.shadowOffsetX = 0
   ctx.shadowOffsetY = 3
 
-  // Dessin des lignes (centrées)
-  for (const line of lines) {
+  // Dessin des lignes centrées, en partant de yStart (ne dépassera jamais en bas)
+  let y = fit.yStart
+  for (const line of fit.lines) {
     const tx = W / 2
-    const ty = y + lineHeight
-    // stroke + fill pour la lisibilité
+    const ty = y + fit.lineHeight
     ctx.lineWidth = strokeW
     ctx.strokeText(line, tx, ty)
     ctx.fillText(line, tx, ty)
-    y += lineHeight
+    y += fit.lineHeight
   }
 
   URL.revokeObjectURL(imgUrl)
-
-  // PNG final
   return await new Promise<Blob>((res) => cvs.toBlob((b) => res(b!), 'image/png'))
 }

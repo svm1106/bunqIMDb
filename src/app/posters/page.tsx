@@ -2,6 +2,7 @@
 'use client'
 
 import * as React from 'react'
+import JSZip from 'jszip'
 import { UploadForPoster } from '@/components/UploadForPoster'
 import { PosterDataTable } from '@/components/PosterTableList'
 import { applyTitleOverlayOnClient } from '@/lib/clientOverlay'
@@ -26,9 +27,9 @@ export type PosterItem = {
   source?: 'imdb' | 'ai'
 
   // stockés dès la génération IA (pour ZIP)
-  dataB64?: string
-  mime?: string
-  filename?: string
+  dataB64?: string            // peut être "data:image/png;base64,..." ou base64 pur
+  mime?: string               // ex: "image/png"
+  filename?: string           // ex: "tt1234567 - Title - IaGenerated.png"
 }
 
 export default function PostersPage() {
@@ -37,22 +38,24 @@ export default function PostersPage() {
   const [downloadingZip, setDownloadingZip] = React.useState(false)
   const [items, setItems] = React.useState<PosterItem[]>([])
 
-  // ⬇️ Multi-loading: plusieurs générations en parallèle
+  // Générations parallèles (plusieurs lignes en "loading")
   const [generatingIds, setGeneratingIds] = React.useState<string[]>([])
-
-  function addGenerating(id: string) {
+  const addGenerating = (id: string) =>
     setGeneratingIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
-  }
-  function removeGenerating(id: string) {
+  const removeGenerating = (id: string) =>
     setGeneratingIds((prev) => prev.filter((x) => x !== id))
-  }
 
-  // sécurise un nom de fichier
-  function safeName(s: string) {
-    return (s || '')
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+  // Helpers
+  const safeName = (s: string) =>
+    (s || '').replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim()
+
+  const extFromMime = (mime?: string) => {
+    if (!mime) return 'bin'
+    const m = mime.toLowerCase()
+    if (m.includes('jpeg') || m.includes('jpg')) return 'jpg'
+    if (m.includes('png')) return 'png'
+    if (m.includes('webp')) return 'webp'
+    return 'bin'
   }
 
   async function loadPosters() {
@@ -79,80 +82,72 @@ export default function PostersPage() {
     }
   }
 
-  // Helpers blob → base64 + dataURL
-  async function blobToBase64(blob: Blob): Promise<{ b64: string; dataUrl: string; mime: string }> {
+  // Blob → base64
+  async function blobToBase64(blob: Blob): Promise<{ b64: string; mime: string }> {
     const arrayBuf = await blob.arrayBuffer()
     const bytes = new Uint8Array(arrayBuf)
     let binary = ''
     for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
     const b64 = typeof window !== 'undefined' ? btoa(binary) : Buffer.from(bytes).toString('base64')
-    const mime = blob.type || 'image/png'
-    return { b64, dataUrl: `data:${mime};base64,${b64}`, mime }
-  }
-
-  async function urlToBase64(url: string): Promise<{ b64: string; mime: string }> {
-    const resp = await fetch(url)
-    const blob = await resp.blob()
-    const { b64, mime } = await blobToBase64(blob)
+    const mime = blob.type || 'application/octet-stream'
     return { b64, mime }
   }
 
+  // Crée UN SEUL ZIP côté client (JSZip) pour tout ce qui est affiché
   async function downloadAllPosters() {
-    const withUrls = items.filter((i) => i.posterUrl)
-    if (withUrls.length === 0) return
+    const toZip = items.filter((i) => i.posterUrl)
+    if (!toZip.length) return
+
     setDownloadingZip(true)
     try {
-      const payloadItems: any[] = []
-      for (const it of withUrls) {
-        const titleBase = safeName(it.title || `row-${it.row}`)
+      const zip = new JSZip()
+
+      for (const it of toZip) {
         const isAI = it.source === 'ai'
-        const suffix = isAI ? 'IaGenerated' : 'IMDb'
+        const titleBase = safeName(it.title || `row-${it.row}`)
 
         if (isAI) {
-          if (it.dataB64 && it.mime) {
-            payloadItems.push({
-              imdbId: it.imdbId || undefined,
-              title: it.title || undefined,
-              dataB64: it.dataB64.startsWith('data:') ? it.dataB64.split(',').pop() : it.dataB64,
-              filename: it.filename || `${titleBase} - ${suffix}.png`,
-              mime: it.mime,
-            })
+          // IA prioritaire : on FORCE le suffixe dans le nom, même si it.filename existe déjà
+          // (garantie d'avoir "IaGenerated" dans le nom)
+          let base64: string
+          let mime = it.mime
+          if (it.dataB64) {
+            base64 = it.dataB64.startsWith('data:') ? it.dataB64.split(',').pop()! : it.dataB64
           } else {
-            const { b64, mime } = await urlToBase64(it.posterUrl)
-            payloadItems.push({
-              imdbId: it.imdbId || undefined,
-              title: it.title || undefined,
-              dataB64: b64,
-              filename: `${titleBase} - ${suffix}.png`,
-              mime,
-            })
+            const resp = await fetch(it.posterUrl)
+            const blob = await resp.blob()
+            const conv = await blobToBase64(blob)
+            base64 = conv.b64
+            mime = mime || conv.mime
           }
+          const ext = (it.filename?.split('.').pop()) || extFromMime(mime) || 'png'
+          const name = `${titleBase} - IaGenerated.${ext}`
+          zip.file(name, base64, { base64: true })
         } else {
-          payloadItems.push({
-            imdbId: it.imdbId || undefined,
-            title: it.title || undefined,
-            posterUrl: it.posterUrl,
-            filename: `${titleBase} - ${suffix}`, // ext ajouté serveur
-          })
+          // IMDb : on passe par un proxy same-origin pour éviter CORS
+          const proxied = `/api/posters/proxy?url=${encodeURIComponent(it.posterUrl)}`
+          const resp = await fetch(proxied)
+          if (!resp.ok) continue
+          const blob = await resp.blob()
+          const { b64, mime } = await blobToBase64(blob)
+          const ext = extFromMime(mime) || 'jpg'
+          const name = `${titleBase} - IMDb.${ext}`
+          zip.file(name, b64, { base64: true })
         }
       }
 
-      const res = await fetch('/api/posters/zip', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: payloadItems }),
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || 'ZIP failed')
-      }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipBlob)
       const a = document.createElement('a')
       a.href = url
       a.download = 'posters.zip'
+      document.body.appendChild(a)
       a.click()
+      a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 2000)
+    } catch (e) {
+      console.error(e)
+      alert("Échec de la préparation du ZIP.")
     } finally {
       setDownloadingZip(false)
     }
@@ -160,7 +155,6 @@ export default function PostersPage() {
 
   async function handleGenerateAI(it: PosterItem) {
     const id = it.id || String(it.row)
-    // si déjà en cours pour cet item, on ignore le re-click
     if (generatingIds.includes(id)) return
 
     try {
@@ -189,7 +183,7 @@ export default function PostersPage() {
 
       const baseBlob = await res.blob()
 
-      // 2) Overlay côté client
+      // 2) Overlay côté client (titre/gradient)
       const finalBlob = await applyTitleOverlayOnClient({
         baseImageBlob: baseBlob,
         title: it.title,
@@ -200,14 +194,15 @@ export default function PostersPage() {
         gradientRatio: 0.42,
       })
 
-      // 3) Prépare affichage + base64/mime/filename (pour ZIP)
+      // 3) Affichage + base64/mime/filename (pour ZIP client)
       const objectUrl = URL.createObjectURL(finalBlob)
-      const { b64, mime } = await blobToBase64(finalBlob)
-      const ext = 'png'
-      const base = `${it.imdbId || `row-${it.row}`}${it.title ? ` - ${safeName(it.title)}` : ''}`
-      const filename = `${base}.${ext}`
+      const conv = await blobToBase64(finalBlob)
+      const mime = conv.mime
+      const ext = extFromMime(mime) || 'png'
+      const titleBase = safeName(it.title || `row-${it.row}`)
+      const filename = `${titleBase} - IaGenerated.${ext}`   // ← suffixe dès la génération
 
-      // ⚠️ écrase l’affichage IMDb par l’IA
+      // ⚠️ On ÉCRASE l’affichage (IMDb → IA)
       setItems((prev) =>
         prev.map((x) =>
           (x.id || String(x.row)) === id
@@ -217,9 +212,9 @@ export default function PostersPage() {
                 status: 'ok',
                 error: undefined,
                 source: 'ai',
-                dataB64: b64,
+                dataB64: conv.b64,
                 mime,
-                filename,
+                filename, // ← gardé si jamais tu réutilises ailleurs
               }
             : x
         )
@@ -247,7 +242,7 @@ export default function PostersPage() {
           onDownloadAll={downloadAllPosters}
           downloadingZip={downloadingZip}
           onGenerateAI={handleGenerateAI}
-          generatingIds={generatingIds} 
+          generatingIds={generatingIds}
         />
       </div>
     </div>

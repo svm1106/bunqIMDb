@@ -2,7 +2,9 @@
   "name": "imdb-bunqer",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
@@ -30,6 +32,7 @@
     "dotenv": "^17.2.1",
     "exceljs": "^4.4.0",
     "formidable": "^3.5.4",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.540.0",
     "next": "15.5.0",
     "openai": "^5.15.0",
