@@ -46,8 +46,8 @@ export async function POST(req: NextRequest) {
       prompt,
       n: nb_images,
       size: '1024x1536',
-      // quality: 'medium',   // active si dispo dans ta version du SDK
-      // background: 'auto',
+      quality: 'medium',   // active si dispo dans ta version du SDK
+      background: 'auto',
     })
 
     const b64 = res.data?.[0]?.b64_json
