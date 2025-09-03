@@ -13,6 +13,9 @@ export default function NavBar() {
         <Button asChild variant="ghost">
           <Link href="/posters">Posters</Link>
         </Button>
+        <Button asChild variant="ghost">
+          <Link href="/keywords-only">Keywords Only</Link>
+        </Button>
       </div>
     </header>
   )
