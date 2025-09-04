@@ -59,7 +59,8 @@ export async function POST(req: NextRequest) {
                 title, synopsis, directors, actors,
                 existingGenres,
                 existingKeywords: currentKw,
-                targetCount: 8,
+                targetCount: 12,
+                keywordsOnlyMode: false,
               })
 
               row.getCell('L').value = finalKw.join(', ')

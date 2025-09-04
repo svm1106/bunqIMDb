@@ -53,48 +53,6 @@ export default function UploadForm() {
     return new Blob([bytes], { type: mime })
   }
 
-  async function runEnrich(formData: FormData): Promise<Blob> {
-    const startedAt = Date.now()
-    let total = 0, done = 0
-
-    await readNdjsonStream(await fetch('/api/enrich', { method: 'POST', body: formData }), (evt) => {
-      if (evt.type === 'progress') {
-        total = evt.total ?? total
-        done  = evt.done ?? done
-        const pct = Number(evt.progress) || (total ? Math.round((done/total)*100) : 0)
-        setProgress1(pct)
-        if (total && done) {
-          const elapsed = (Date.now() - startedAt) / 1000
-          const rate = done / Math.max(elapsed, 0.001)
-          const remaining = Math.max(total - done, 0)
-          const sec = rate > 0 ? Math.round(remaining / rate) : 0
-          const mm = Math.floor(sec / 60)
-          const ss = sec % 60
-          setEta1(`${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`)
-        }
-      } else if (evt.type === 'log') {
-        pushLog(`${(evt.level || 'info').toUpperCase()}${evt.row ? ` [row ${evt.row}]` : ''}: ${evt.message}`)
-      } else if (evt.type === 'error') {
-        pushLog(`ERROR: ${evt.message}`)
-        setShowDialog(true)
-      } else if (evt.type === 'done') {
-        setProgress1(100); setEta1('00:00')
-        pushLog('Enrichissement terminé.')
-      }
-    })
-
-    // Récupère la dernière ligne done via un second fetch ? Non: on reconstruit via setResultUrl au fil.
-    // On retourne le blob reconstruit à partir de la dernière "done" captée :
-    // => pour être simple, on refait un petit fetch binaire de l’URL en mémoire si on l’a,
-    // mais mieux : stocke le blob localement lorsque "done" arrive.
-
-    // Solution: on relit les logs pour extraire la dernière 'done' ? Trop complexe ici,
-    // Donc on redécode le b64 dans le handler "done" directement :
-
-    // On capture le blob enrich dans une variable externe :
-    throw new Error('Cette fonction doit être appelée via runPipeline() ci-dessous.')
-  }
-
   async function runPipeline() {
     setLoading(true)
     setResultUrl(null)
@@ -184,7 +142,7 @@ export default function UploadForm() {
             const url = URL.createObjectURL(finalBlob)
             setResultUrl(url) // remplace par la version avec keywords
             setProgress2(100); setEta2('00:00')
-            pushLog('Complétion des mots‑clé terminée.')
+            pushLog('Complétion des mots-clé terminée.')
             setShowDialog(true) // affiche le rapport final
           }
           if (evt.type === 'error') {
@@ -213,7 +171,7 @@ export default function UploadForm() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Switch checked={doKeywords} onCheckedChange={setDoKeywords} id="kw-switch" />
-              <Label htmlFor="kw-switch">Compléter automatiquement les mots‑clé (8 au total)</Label>
+              <Label htmlFor="kw-switch">Compléter automatiquement les mots-clé (12 au total)</Label>
             </div>
           </div>
 
@@ -246,7 +204,7 @@ export default function UploadForm() {
           {doKeywords && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>Mots‑clé</span>
+                <span>Mots-clé</span>
                 <span className="tabular-nums">{progress2}% {eta2 ? `• ETA ${eta2}` : ''}</span>
               </div>
               <Progress value={progress2} className="h-2" />
@@ -257,7 +215,7 @@ export default function UploadForm() {
             <div className="text-center">
               <a href={resultUrl} download={doKeywords ? 'fichier-keywords.xlsx' : 'fichier-enrichi.xlsx'}
                  className="text-blue-600 underline">
-                Télécharger le fichier {doKeywords ? 'avec mots‑clé' : 'enrichi'}
+                Télécharger le fichier {doKeywords ? 'avec mots-clé' : 'enrichi'}
               </a>
             </div>
           )}

@@ -1,3 +1,5 @@
+//src/app/keywords-only/page.tsx
+
 'use client'
 import React, { useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
